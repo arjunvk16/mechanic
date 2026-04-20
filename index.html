@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mechanic Portal</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: #f4f7f6; color: #333; padding: 15px; }
+        .container { max-width: 600px; margin: 0 auto; }
+        
+        .card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        
+        input, select { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; }
+        button { background: #3498db; color: white; border: none; padding: 14px; width: 100%; border-radius: 4px; font-weight: bold; cursor: pointer; margin-bottom: 10px; transition: background 0.2s; }
+        button:hover { background: #2980b9; }
+        button.btn-danger { background: #e74c3c; width: auto; padding: 8px 15px; }
+        button.btn-success { background: #2ecc71; margin-top: 15px; }
+        button.btn-secondary { background: #95a5a6; }
+        button.btn-secondary:hover { background: #7f8c8d; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; }
+        th, td { text-align: left; padding: 10px; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+        
+        #dashboardSection { display: none; }
+        #loginSection { max-width: 400px; margin: 100px auto; text-align: center; }
+
+        @media print {
+            body { background-color: white; padding: 0; }
+            .no-print { display: none !important; }
+            .card { box-shadow: none; border: none; padding: 0; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loginSection" class="card">
+        <h2>Mechanic Login</h2>
+        <input type="email" id="email" placeholder="Your Email">
+        <input type="password" id="password" placeholder="Password">
+        <button id="loginBtn">Login / Register</button>
+        <p id="errorMsg" style="color: red; margin-top: 10px;"></p>
+    </div>
+
+    <div id="dashboardSection" class="container">
+        <div class="no-print">
+            <div class="header">
+                <h2>Mechanic Dashboard</h2>
+                <button id="logoutBtn" class="btn-danger">Logout</button>
+            </div>
+
+            <div class="card">
+                <h3>Client Details</h3>
+                <input type="text" id="clientName" placeholder="Client Name (Optional)">
+            </div>
+
+            <div class="card">
+                <h3>Add Existing Part to Bill</h3>
+                <select id="partSelect"><option value="" disabled selected>Select a part...</option></select>
+                <button id="addPartBtn">Add Selected to Bill</button>
+            </div>
+
+            <div class="card" style="border-left: 4px solid #f39c12;">
+                <h3>Create New Global Part</h3>
+                <p style="font-size: 0.9em; color: #666; margin-bottom: 10px;">Part not in the list? Add it to the shared database here.</p>
+                <input type="text" id="newPartName" placeholder="New Part Name">
+                <input type="number" id="newPartPrice" placeholder="Price (₹)">
+                <button id="addNewGlobalPartBtn" class="btn-secondary">Save to Database & Add to Bill</button>
+            </div>
+        </div>
+
+        <div class="card" id="printableBill">
+            <div style="text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 15px;">
+                <h1 style="margin: 0;">Auto Mechanic Shop</h1>
+                <p style="margin: 5px 0 0 0; color: #666;">Invoice / Receipt</p>
+            </div>
+            <p><strong>Bill No:</strong> <span id="billNo">Pending...</span></p>
+            <p><strong>Date:</strong> <span id="billDate">Pending...</span></p>
+            <p><strong>Mechanic:</strong> <span id="workerName"></span></p>
+            <p><strong>Client:</strong> <span id="displayClientName"></span></p>
+            
+            <table id="billItems">
+                </table>
+            
+            <h3 style="text-align: right;">Total: ₹<span id="billTotal">0.00</span></h3>
+        </div>
+
+        <button class="no-print btn-success" id="saveAndPrintBtn">Save & Print Invoice</button>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+        import { getFirestore, collection, getDocs, addDoc, setDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAJ9K9fQ0ThMB7aXB6qNHr3_yLUdqJgnCM",
+            authDomain: "my-chain-reaction-game.firebaseapp.com",
+            projectId: "my-chain-reaction-game",
+            storageBucket: "my-chain-reaction-game.appspot.com",
+            messagingSenderId: "32751418407",
+            appId: "1:32751418407:web:ff8244007ef2b099d56202"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let currentBillParts = [];
+        let total = 0;
+
+        // --- AUTHENTICATION ---
+        onAuthStateChanged(auth, user => {
+            if (user) {
+                document.getElementById('loginSection').style.display = 'none';
+                document.getElementById('dashboardSection').style.display = 'block';
+                document.getElementById('workerName').innerText = user.email;
+                document.getElementById('errorMsg').innerText = "";
+                loadInventory();
+                renderBillTable(); // Initialize empty table
+            } else {
+                document.getElementById('loginSection').style.display = 'block';
+                document.getElementById('dashboardSection').style.display = 'none';
+            }
+        });
+
+        document.getElementById('loginBtn').addEventListener('click', async () => {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            if(!email || !password) return alert("Please enter credentials.");
+            
+            document.getElementById('loginBtn').innerText = "Processing...";
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                document.getElementById('loginBtn').innerText = "Login / Register";
+            } catch (error) {
+                if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
+                    try {
+                        const res = await createUserWithEmailAndPassword(auth, email, password);
+                        await setDoc(doc(db, "users", res.user.uid), { email: email, role: "worker" });
+                    } catch (regError) {
+                        document.getElementById('errorMsg').innerText = "Registration Error: " + regError.message;
+                    }
+                } else {
+                    document.getElementById('errorMsg').innerText = "Error: " + error.message;
+                }
+                document.getElementById('loginBtn').innerText = "Login / Register";
+            }
+        });
+
+        document.getElementById('logoutBtn').addEventListener('click', () => signOut(auth));
+
+        // --- BILLING LOGIC ---
+        async function loadInventory() {
+            const select = document.getElementById('partSelect');
+            select.innerHTML = '<option value="" disabled selected>Select a part...</option>';
+            const snapshot = await getDocs(collection(db, "inventory"));
+            snapshot.forEach((d) => {
+                let p = d.data();
+                let opt = document.createElement("option");
+                opt.text = `${p.name} - ₹${p.price.toFixed(2)}`;
+                opt.value = JSON.stringify({id: d.id, name: p.name, price: p.price});
+                select.add(opt);
+            });
+        }
+
+        // New feature: Render the bill dynamically so we can delete items
+        function renderBillTable() {
+            const table = document.getElementById('billItems');
+            table.innerHTML = `<tr><th>Item / Service</th><th>Price</th><th class="no-print">Action</th></tr>`;
+            
+            total = 0;
+            currentBillParts.forEach((part, index) => {
+                total += parseFloat(part.price);
+                table.innerHTML += `
+                    <tr>
+                        <td>${part.name}</td>
+                        <td>₹${part.price.toFixed(2)}</td>
+                        <td class="no-print">
+                            <button class="btn-danger" style="padding: 4px 8px; font-size: 12px; margin: 0;" onclick="removePart(${index})">Remove</button>
+                        </td>
+                    </tr>`;
+            });
+            
+            document.getElementById('billTotal').innerText = total.toFixed(2);
+            document.getElementById('displayClientName').innerText = document.getElementById('clientName').value || "Walk-in";
+        }
+
+        // Global function to remove an item when the inline button is clicked
+        window.removePart = function(index) {
+            currentBillParts.splice(index, 1); // Remove item from array
+            renderBillTable(); // Redraw the table
+        };
+
+        // Action 1: Add existing part
+        document.getElementById('addPartBtn').addEventListener('click', () => {
+            const val = document.getElementById('partSelect').value;
+            if(!val) return alert("Please select a part from the dropdown.");
+            
+            currentBillParts.push(JSON.parse(val));
+            renderBillTable();
+        });
+
+        // Action 2: Add brand new part to global DB and bill
+        document.getElementById('addNewGlobalPartBtn').addEventListener('click', async () => {
+            const name = document.getElementById('newPartName').value;
+            const price = parseFloat(document.getElementById('newPartPrice').value);
+            
+            if(!name || isNaN(price)) return alert("Please enter a valid part name and price.");
+
+            document.getElementById('addNewGlobalPartBtn').innerText = "Saving...";
+
+            try {
+                const docRef = await addDoc(collection(db, "inventory"), { name, price });
+                
+                currentBillParts.push({ id: docRef.id, name: name, price: price });
+                renderBillTable();
+                
+                document.getElementById('newPartName').value = '';
+                document.getElementById('newPartPrice').value = '';
+                loadInventory();
+                
+                alert("Part added to global inventory and your bill!");
+            } catch (error) {
+                alert("Error adding part: " + error.message);
+            }
+            document.getElementById('addNewGlobalPartBtn').innerText = "Save to Database & Add to Bill";
+        });
+
+        // Save & Print
+        document.getElementById('saveAndPrintBtn').addEventListener('click', async () => {
+            if(currentBillParts.length === 0) return alert("Please add at least one part to the bill first.");
+            const billNum = "INV-" + Math.floor(1000 + Math.random() * 9000); 
+            
+            document.getElementById('billNo').innerText = billNum;
+            document.getElementById('billDate').innerText = new Date().toLocaleString();
+            document.getElementById('displayClientName').innerText = document.getElementById('clientName').value || "Walk-in";
+
+            try {
+                await addDoc(collection(db, "bills"), {
+                    billNumber: billNum,
+                    clientName: document.getElementById('clientName').value || "Walk-in",
+                    workerEmail: auth.currentUser.email,
+                    parts: currentBillParts,
+                    total: total,
+                    timestamp: serverTimestamp()
+                });
+                window.print();
+                
+                // Optional: Clear the bill after printing so they can start a new one
+                currentBillParts = [];
+                renderBillTable();
+                document.getElementById('clientName').value = '';
+                
+            } catch (error) {
+                alert("Error saving bill. Make sure you are connected to the database.");
+            }
+        });
+    </script>
+</body>
+</html>
